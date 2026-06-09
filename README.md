@@ -79,5 +79,3 @@ Questa versione conserva la logica principale dei notebook, ma separa:
 - dataset/loading da modello;
 - training da evaluation;
 - metriche da plotting/notebook.
-
-Per un uso finale, conviene aggiungere un file `visualization.py` per sample inspection e confusion matrix publishable.
