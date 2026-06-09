@@ -1,0 +1,18 @@
+root_dir: /path/to/dataset_patches_BDD
+checkpoint_dir: /path/to/results/LF/SAR_RGB_FTP
+
+seed: 42
+num_folds: 5
+batch_size: 32
+epochs: 30
+learning_rate: 0.0001
+num_workers: 4
+patience: 5
+embed_dim: 128
+
+use_sar: true
+use_rgb: true
+use_class_weights: false
+use_sar_pretrained: false
+sar_pretrain_path: null
+cache_dataset: false

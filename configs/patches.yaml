@@ -1,0 +1,14 @@
+sar_hh_path: /path/to/CSK/HH.tif
+sar_hv_path: /path/to/CSK/HV.tif
+rgb_path: /path/to/MAXAR_RGB.tif
+osm_path: /path/to/osm_polygons_with_damage.gpkg
+osm_layer: null
+out_dir: /path/to/dataset_patches_BDD
+
+patch_px_sar: 40
+ratio_intact_to_damaged: 20
+seed: 42
+
+columns:
+  id: osm_id
+  label: damagedid
