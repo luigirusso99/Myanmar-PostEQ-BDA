@@ -173,10 +173,14 @@ if __name__ == "__main__":
         threshold=args.threshold,
     )
 
-### Example launch; --buildings is the path to the original gpkg layer used as GT to train the BDD model
-# python -m src.bdd.build_oof_map \
-#   --oof /home/silvia/Desktop/GIGI/ASI_WGD_2026_Myanmar/BDD/results_BDD_no_cls_whts/oof_predictions.csv \
-#   --buildings /home/silvia/Desktop/GIGI/ASI_WGD_2026_Myanmar/BDD/results_BDD_no_cls_whts \ 
-#   --id-column osm_id \
-#   --out /home/silvia/Desktop/GIGI/ASI_WGD_2026_Myanmar/BDD/results_BDD_no_cls_whts/oof_damage_map.gpkg \
-#   --threshold 0.5
+"""
+Example launch; --buildings must be the original building GeoPackage used to create the patches.
+Important: do not leave spaces after the trailing backslashes.
+
+python -m src.bdd.build_oof_map \
+  --oof /home/silvia/Desktop/GIGI/ASI_WGD_2026_Myanmar/BDD/results_BDD_no_cls_whts/oof_predictions.csv \
+  --buildings /home/silvia/Desktop/GIGI/ASI_WGD_2026_Myanmar/BDD/data/REF/OSM_Polygons_with_dmg_clipped.gpkg \
+  --id-column osm_id \
+  --out /home/silvia/Desktop/GIGI/ASI_WGD_2026_Myanmar/BDD/results_BDD_no_cls_whts/oof_damage_map.gpkg \
+  --threshold 0.5
+"""
