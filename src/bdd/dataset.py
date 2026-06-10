@@ -82,9 +82,9 @@ class SarRgbFootprintDataset(Dataset):
         with rasterio.open(path) as ds:
             arr = ds.read([1, 2]).astype(np.float32)
         arr = self._resize_channels(arr, cv2.INTER_LINEAR_EXACT)
-        hh, hv = arr[0], arr[1]
-        ratio = np.divide(hh, hv, out=np.zeros_like(hh), where=hv > 1e-6)
-        sar = np.stack([hh, hv, ratio if add_ratio else hv], axis=0)
+        band_1, band_2 = arr[0], arr[1]
+        ratio = np.divide(band_1, band_2, out=np.zeros_like(band_1), where=np.abs(band_2) > 1e-6)
+        sar = np.stack([band_1, band_2, ratio if add_ratio else band_2], axis=0)
         return self._percentile_stretch(sar)
 
     def _read_rgb(self, path: Path) -> np.ndarray:
@@ -122,7 +122,8 @@ class SarRgbFootprintDataset(Dataset):
         return (x, y, sid) if self.return_id else (x, y)
 
 
-def filter_zero_rgb_samples(root_dir: str, manifest_name: str = "patch_list.csv") -> pd.DataFrame:
+
+def filter_invalid_samples(root_dir: str, manifest_name: str = "patch_list.csv") -> pd.DataFrame:
     root = Path(root_dir)
     df = pd.read_csv(root / manifest_name)
     keep = []
@@ -131,24 +132,37 @@ def filter_zero_rgb_samples(root_dir: str, manifest_name: str = "patch_list.csv"
         sid = str(row["id"])
         try:
             with rasterio.open(root / f"{sid}_RGB.tif") as ds:
-                arr = ds.read()
-            if np.any(arr):
+                rgb = ds.read()
+            with rasterio.open(root / f"{sid}_SAR.tif") as ds:
+                sar = ds.read([1, 2])
+            with rasterio.open(root / f"{sid}_SARftp.tif") as ds:
+                ftp = ds.read(1)
+
+            valid_rgb = np.isfinite(rgb).all() and np.any(rgb != 0)
+            valid_sar = np.isfinite(sar).all() and np.any(sar != 0)
+            valid_ftp = np.isfinite(ftp).all() and np.any(ftp != 0)
+
+            if valid_rgb and valid_sar and valid_ftp:
                 keep.append((sid, int(row["label"])))
             else:
                 removed += 1
         except Exception:
             removed += 1
     out = pd.DataFrame(keep, columns=["id", "label"])
-    print(f"Removed {removed} samples with missing/zero RGB. Kept {len(out)}.")
+    print(f"Removed {removed} samples with missing/zero SAR, RGB, or footprint. Kept {len(out)}.")
     return out
 
 
-def make_stratified_folds(root_dir: str, out_dir: str | None = None, n_splits: int = 5, seed: int = 42):
+def filter_zero_rgb_samples(root_dir: str, manifest_name: str = "patch_list.csv") -> pd.DataFrame:
+    return filter_invalid_samples(root_dir, manifest_name)
+
+
+def make_stratified_folds(root_dir: str, out_dir: Optional[str] = None, n_splits: int = 5, seed: int = 42):
     root = Path(root_dir)
     folds_dir = Path(out_dir) if out_dir else root / f"folds_seed{seed}"
     folds_dir.mkdir(parents=True, exist_ok=True)
 
-    df = filter_zero_rgb_samples(root_dir)
+    df = filter_invalid_samples(root_dir)
     ids = df["id"].astype(str).tolist()
     y = df["label"].astype(int).to_numpy()
 
@@ -186,3 +200,58 @@ def make_loader(dataset, batch_size: int, num_workers: int, shuffle: bool, sampl
         drop_last=drop_last,
         persistent_workers=num_workers > 0,
     )
+
+if __name__ == '__main__':
+    from pathlib import Path
+
+    from src.bdd.dataset import (
+        SarRgbFootprintDataset,
+        make_stratified_folds,
+        make_loader,
+    )
+
+
+    ROOT_DIR = "/home/silvia/Desktop/GIGI/ASI_WGD_2026_Myanmar/BDD/data/patches"
+    SEED = 42
+    N_SPLITS = 5
+
+
+    def main():
+        folds = make_stratified_folds(
+            root_dir=ROOT_DIR,
+            n_splits=N_SPLITS,
+            seed=SEED,
+        )
+
+        train_ids, val_ids = folds[0]
+
+        train_ds = SarRgbFootprintDataset(
+            root_dir=ROOT_DIR,
+            ids=train_ids,
+            image_size=224,
+            return_id=True,
+        )
+
+        val_ds = SarRgbFootprintDataset(
+            root_dir=ROOT_DIR,
+            ids=val_ids,
+            image_size=224,
+            return_id=True,
+        )
+
+        train_loader = make_loader(
+            train_ds,
+            batch_size=8,
+            num_workers=0,
+            shuffle=True,
+        )
+
+        (sar, rgb, ftp), y, sid = next(iter(train_loader))
+
+        print("Train samples:", len(train_ds))
+        print("Val samples:", len(val_ds))
+        print("SAR shape:", sar.shape)
+        print("RGB shape:", rgb.shape)
+        print("FTP shape:", ftp.shape)
+        print("Label shape:", y.shape)
+        print("Example IDs:", sid[:3])
