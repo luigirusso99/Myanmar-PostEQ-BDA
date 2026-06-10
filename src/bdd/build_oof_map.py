@@ -80,34 +80,42 @@ def build_oof_damage_map(
 
     merged = buildings.merge(oof, on="building_id", how="left")
 
-    merged["evaluated"] = merged["prob_damage"].notna()
-    merged["pred_label"] = merged["pred_label"].fillna(-1).astype(int)
-    merged["damage_status"] = merged["damage_status"].fillna("not_evaluated")
-
-    merged["map_class"] = merged["damage_status"].map(
+    evaluated_mask = merged["prob_damage"].notna()
+    out_gdf = merged.loc[evaluated_mask, ["id", "prob_damage", "damage_status", "geometry"]].copy()
+    out_gdf["DmgStatus"] = out_gdf["damage_status"].replace(
         {
-            "damaged": 1,
-            "intact": 0,
-            "not_evaluated": -1,
+            "damaged": "Dmg",
+            "intact": "Intact",
         }
     )
+    out_gdf = out_gdf.rename(
+        columns={
+            "id": "PatchID",
+            "prob_damage": "ProbDmg",
+        }
+    )
+    out_gdf = out_gdf[["PatchID", "ProbDmg", "DmgStatus", "geometry"]]
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    merged.to_file(out_path, layer=output_layer, driver="GPKG")
+    driver = "ESRI Shapefile" if out_path.suffix.lower() == ".shp" else "GPKG"
+    if driver == "ESRI Shapefile":
+        out_gdf.to_file(out_path, driver=driver)
+    else:
+        out_gdf.to_file(out_path, layer=output_layer, driver=driver)
 
-    n_total = len(merged)
-    n_evaluated = int(merged["evaluated"].sum())
-    n_damaged = int((merged["damage_status"] == "damaged").sum())
-    n_intact = int((merged["damage_status"] == "intact").sum())
-    n_not_evaluated = int((merged["damage_status"] == "not_evaluated").sum())
+    n_total_original = len(merged)
+    n_total = len(out_gdf)
+    n_damaged = int((out_gdf["DmgStatus"] == "Dmg").sum())
+    n_intact = int((out_gdf["DmgStatus"] == "Intact").sum())
+    n_not_evaluated = n_total_original - n_total
 
     print(f"Saved OOF damage map: {out_path}")
     print(f"Layer: {output_layer}")
-    print(f"Total buildings: {n_total}")
-    print(f"Evaluated buildings: {n_evaluated}")
+    print(f"Original buildings: {n_total_original}")
+    print(f"Written evaluated buildings: {n_total}")
     print(f"Predicted damaged: {n_damaged}")
     print(f"Predicted intact: {n_intact}")
-    print(f"Not evaluated: {n_not_evaluated}")
+    print(f"Skipped not evaluated: {n_not_evaluated}")
 
     return out_path
 
@@ -144,7 +152,7 @@ def parse_args():
         "--out",
         required=True,
         type=str,
-        help="Output GeoPackage path.",
+        help="Output vector path. Use .shp for Shapefile or .gpkg for GeoPackage.",
     )
     parser.add_argument(
         "--output-layer",
@@ -181,6 +189,6 @@ python -m src.bdd.build_oof_map \
   --oof /home/silvia/Desktop/GIGI/ASI_WGD_2026_Myanmar/BDD/results_BDD_no_cls_whts/oof_predictions.csv \
   --buildings /home/silvia/Desktop/GIGI/ASI_WGD_2026_Myanmar/BDD/data/REF/OSM_Polygons_with_dmg_clipped.gpkg \
   --id-column osm_id \
-  --out /home/silvia/Desktop/GIGI/ASI_WGD_2026_Myanmar/BDD/results_BDD_no_cls_whts/oof_damage_map.gpkg \
+  --out /home/silvia/Desktop/GIGI/ASI_WGD_2026_Myanmar/BDD/results_BDD_no_cls_whts/oof_damage_map.shp \
   --threshold 0.5
 """
