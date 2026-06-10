@@ -203,6 +203,7 @@ def make_loader(dataset, batch_size: int, num_workers: int, shuffle: bool, sampl
 
 if __name__ == '__main__':
     from pathlib import Path
+    import matplotlib.pyplot as plt
 
     from src.bdd.dataset import (
         SarRgbFootprintDataset,
@@ -214,6 +215,41 @@ if __name__ == '__main__':
     ROOT_DIR = "/home/silvia/Desktop/GIGI/ASI_WGD_2026_Myanmar/BDD/data/patches"
     SEED = 42
     N_SPLITS = 5
+
+
+    def show_batch_examples(sar, rgb, ftp, y, sid, max_items: int = 4):
+        n = min(max_items, sar.shape[0])
+        fig, axes = plt.subplots(n, 4, figsize=(13, 3.2 * n))
+
+        if n == 1:
+            axes = np.expand_dims(axes, axis=0)
+
+        for i in range(n):
+            label_name = "damaged" if int(y[i].item()) == 1 else "intact"
+
+            rgb_img = rgb[i].permute(1, 2, 0).cpu().numpy()
+            sar_band_1 = sar[i, 0].cpu().numpy()
+            sar_band_2 = sar[i, 1].cpu().numpy()
+            ftp_mask = ftp[i, 0].cpu().numpy()
+
+            axes[i, 0].imshow(rgb_img)
+            axes[i, 0].set_title(f"{sid[i]}\nRGB - {label_name}")
+            axes[i, 0].axis("off")
+
+            axes[i, 1].imshow(sar_band_1, cmap="gray")
+            axes[i, 1].set_title("SAR band 1")
+            axes[i, 1].axis("off")
+
+            axes[i, 2].imshow(sar_band_2, cmap="gray")
+            axes[i, 2].set_title("SAR band 2")
+            axes[i, 2].axis("off")
+
+            axes[i, 3].imshow(ftp_mask, cmap="gray")
+            axes[i, 3].set_title("Footprint")
+            axes[i, 3].axis("off")
+
+        plt.tight_layout()
+        plt.show()
 
 
     def main():
@@ -255,3 +291,5 @@ if __name__ == '__main__':
         print("FTP shape:", ftp.shape)
         print("Label shape:", y.shape)
         print("Example IDs:", sid[:3])
+        show_batch_examples(sar, rgb, ftp, y, sid, max_items=4)
+    main()
