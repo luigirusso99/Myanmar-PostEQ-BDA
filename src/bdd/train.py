@@ -3,6 +3,8 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+import yaml
+import argparse
 from sklearn import metrics
 from torch.utils.data import WeightedRandomSampler
 from tqdm.auto import tqdm
@@ -75,7 +77,7 @@ def train_cross_validation(cfg: dict):
 
         if cfg["pretraining"].get("use_sar_pretrained", False):
             ckpt = torch.load(cfg["pretraining"]["sar_pretrain_path"], map_location="cpu")
-            model.branch_sar.load_state_dict(ckpt, strict=False)
+            model.sar_trunk.load_state_dict(ckpt, strict=False)
 
         model.to(device)
 
@@ -192,3 +194,25 @@ def train_cross_validation(cfg: dict):
         print(f"Saved CV results: {checkpoint_dir / 'cv_results.csv'}")
 
     return results
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train FGCA model with stratified cross-validation.")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="configs/train.yaml",
+        help="Path to the YAML training configuration file.",
+    )
+    return parser.parse_args()
+
+
+def load_config(config_path: str) -> dict:
+    with open(config_path, "r") as f:
+        return yaml.safe_load(f)
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    cfg = load_config(args.config)
+    train_cross_validation(cfg)
