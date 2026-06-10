@@ -1,9 +1,9 @@
-sar_hh_path: /path/to/CSK/HH.tif
-sar_hv_path: /path/to/CSK/HV.tif
-rgb_path: /path/to/MAXAR_RGB.tif
-osm_path: /path/to/osm_polygons_with_damage.gpkg
+sar_hh_path: /home/silvia/Desktop/GIGI/ASI_WGD_2026_Myanmar/BDD/data/CSG/vv/CSG_SSAR2_GTC_F_0101_S2B_007_VV_LD_F_20250329114557_20250329114606_1_F_22N_Z47_N00/CSG_SSAR2_GTC_F_0101_S2B_007_VV_LD_F_20250329114557_20250329114606_1_F_CLIPTOMAXAR.tif
+sar_hv_path: /home/silvia/Desktop/GIGI/ASI_WGD_2026_Myanmar/BDD/data/CSG/vh/CSG_SSAR2_GTC_F_0101_S2B_007_VH_LD_F_20250329114557_20250329114606_1_F_22N_Z47_N00/CSG_SSAR2_GTC_F_0101_S2B_007_VH_LD_F_20250329114557_20250329114606_CLIPTOMAXAR.tif
+rgb_path: /home/silvia/Desktop/GIGI/ASI_WGD_2026_Myanmar/BDD/data/MAXAR/Maxar_Pansharpened_31_03_05m_CLIPTOCSK.tif
+osm_path: /home/silvia/Desktop/GIGI/ASI_WGD_2026_Myanmar/BDD/data/REF/OSM_Polygons_with_dmg_clipped.gpkg
 osm_layer: null
-out_dir: /path/to/dataset_patches_BDD
+out_dir: /home/silvia/Desktop/GIGI/ASI_WGD_2026_Myanmar/BDD/data/patches
 
 # Common SAR/RGB patch grid.
 common_resolution_strategy: coarsest
@@ -12,6 +12,10 @@ common_resolution_strategy: coarsest
 common_patch_size_m: 20
 
 ratio_intact_to_damaged: 20
+
+# Minimum fraction of valid SAR pixels required to keep a patch.
+min_sar_valid_fraction: 0.90
+
 seed: 42
 
 columns:

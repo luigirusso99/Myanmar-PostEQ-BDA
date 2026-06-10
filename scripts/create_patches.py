@@ -1,6 +1,6 @@
 import argparse
-from bdd.config import load_config
-from bdd.patches import create_dataset_patches
+from src.bdd.config import load_config
+from src.bdd.patches import create_dataset_patches
 
 def main():
     parser = argparse.ArgumentParser()

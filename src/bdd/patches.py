@@ -128,6 +128,13 @@ def read_dataset_on_common_grid(ds, band_indexes, dst_crs, dst_transform, patch_
     return dst
 
 
+def compute_valid_sar_fraction(stack: np.ndarray) -> float:
+    """Compute the fraction of pixels with valid SAR information in both channels."""
+    valid = np.isfinite(stack).all(axis=0)
+    valid &= np.any(stack != 0, axis=0)
+    return float(valid.mean())
+
+
 def create_dataset_patches(cfg: dict) -> Path:
     random.seed(int(cfg.get("seed", 42)))
 
@@ -136,6 +143,7 @@ def create_dataset_patches(cfg: dict) -> Path:
 
     patch_px_sar = int(cfg.get("patch_px_sar", 40))
     ratio = cfg.get("ratio_intact_to_damaged", 20)
+    min_sar_valid_fraction = float(cfg.get("min_sar_valid_fraction", 0.90))
 
     osm_layer = cfg.get("osm_layer", None)
     col_id = cfg.get("columns", {}).get("id", "osm_id")
@@ -218,6 +226,10 @@ def create_dataset_patches(cfg: dict) -> Path:
                 ],
                 axis=0,
             )
+            sar_valid_fraction = compute_valid_sar_fraction(stack)
+            if sar_valid_fraction < min_sar_valid_fraction:
+                continue
+
             mask = rasterize_footprint(
                 geom,
                 out_shape=(common_patch_px, common_patch_px),
