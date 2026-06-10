@@ -8,43 +8,10 @@ import numpy as np
 import rasterio
 from rasterio.features import rasterize
 from rasterio.warp import reproject, Resampling
+from rasterio.transform import from_origin
 from rasterio.windows import Window
 from shapely.geometry import box
 from tqdm import tqdm
-
-
-def compute_sar_window(ds, cx: float, cy: float, patch_px: int):
-    row, col = ds.index(cx, cy)
-    half = patch_px // 2
-    row0, col0 = row - half, col - half
-    if row0 < 0 or col0 < 0 or row0 + patch_px > ds.height or col0 + patch_px > ds.width:
-        return None
-    return Window(col0, row0, patch_px, patch_px)
-
-
-def read_hh_hv_stack(hh_ds, hv_ds, window):
-    hh = hh_ds.read(1, window=window).astype(np.float32)
-    same_grid = (
-        hh_ds.transform.a == hv_ds.transform.a
-        and hh_ds.transform.e == hv_ds.transform.e
-        and hh_ds.crs == hv_ds.crs
-    )
-    if same_grid:
-        hv = hv_ds.read(1, window=window).astype(np.float32)
-    else:
-        dst = np.zeros_like(hh, dtype=np.float32)
-        win_tr = rasterio.windows.transform(window, hh_ds.transform)
-        reproject(
-            source=rasterio.band(hv_ds, 1),
-            destination=dst,
-            src_transform=hv_ds.transform,
-            src_crs=hv_ds.crs,
-            dst_transform=win_tr,
-            dst_crs=hh_ds.crs,
-            resampling=Resampling.bilinear,
-        )
-        hv = dst
-    return np.stack([hh, hv], axis=0)
 
 
 def rasterize_footprint(geom, out_shape, transform):
@@ -77,18 +44,88 @@ def save_geotiff(path, array, crs, transform, dtype=None):
             dst.write(array)
 
 
-def physical_patch_size_m(ds, patch_px: int):
-    return patch_px * abs(ds.transform.a), patch_px * abs(ds.transform.e)
+def choose_common_resolution_m(hh_ds, rgb_ds, cfg: dict) -> float:
+    """Choose the output ground sampling distance for the common patch grid."""
+    requested = cfg.get("common_resolution_m", None)
+    if requested is not None:
+        return float(requested)
+
+    sar_res = min(abs(hh_ds.transform.a), abs(hh_ds.transform.e))
+    rgb_res = min(abs(rgb_ds.transform.a), abs(rgb_ds.transform.e))
+    strategy = cfg.get("common_resolution_strategy", "finest")
+
+    if strategy == "finest":
+        return min(sar_res, rgb_res)
+    if strategy == "coarsest":
+        return max(sar_res, rgb_res)
+    if strategy == "sar":
+        return sar_res
+    if strategy == "rgb":
+        return rgb_res
+
+    raise ValueError(
+        "common_resolution_strategy must be one of: finest, coarsest, sar, rgb"
+    )
 
 
-def compute_window_for_same_area(ds, center_x, center_y, width_m, height_m):
-    px_w = max(1, int(round(width_m / abs(ds.transform.a))))
-    px_h = max(1, int(round(height_m / abs(ds.transform.e))))
-    row, col = ds.index(center_x, center_y)
-    row0, col0 = row - px_h // 2, col - px_w // 2
-    if row0 < 0 or col0 < 0 or row0 + px_h > ds.height or col0 + px_w > ds.width:
-        return None
-    return Window(col0, row0, px_w, px_h)
+def choose_common_patch_size_px(cfg: dict, resolution_m: float) -> int:
+    """Choose the patch size on the common grid."""
+    if cfg.get("common_patch_px", None) is not None:
+        patch_px = int(cfg["common_patch_px"])
+    elif cfg.get("common_patch_size_m", None) is not None:
+        patch_px = int(round(float(cfg["common_patch_size_m"]) / resolution_m))
+    else:
+        patch_px = int(cfg.get("patch_px_sar", 40))
+
+    if patch_px <= 0:
+        raise ValueError("common patch size must be positive")
+
+    if patch_px % 2 == 0:
+        patch_px += 1
+
+    return patch_px
+
+
+def compute_common_patch_transform(center_x: float, center_y: float, patch_px: int, resolution_m: float):
+    """Build an output transform for a square patch centered on the building centroid."""
+    half_size_m = patch_px * resolution_m / 2.0
+    west = center_x - half_size_m
+    north = center_y + half_size_m
+    return from_origin(west, north, resolution_m, resolution_m)
+
+
+def patch_bounds_from_transform(transform, patch_px: int):
+    west = transform.c
+    north = transform.f
+    east = west + patch_px * transform.a
+    south = north + patch_px * transform.e
+    return min(west, east), min(south, north), max(west, east), max(south, north)
+
+
+def dataset_covers_bounds(ds, bounds) -> bool:
+    minx, miny, maxx, maxy = bounds
+    return (
+        minx >= ds.bounds.left
+        and maxx <= ds.bounds.right
+        and miny >= ds.bounds.bottom
+        and maxy <= ds.bounds.top
+    )
+
+
+def read_dataset_on_common_grid(ds, band_indexes, dst_crs, dst_transform, patch_px: int, resampling=Resampling.bilinear):
+    """Read and resample selected bands from any raster onto the common patch grid."""
+    dst = np.zeros((len(band_indexes), patch_px, patch_px), dtype=np.float32)
+    for out_idx, band_idx in enumerate(band_indexes):
+        reproject(
+            source=rasterio.band(ds, band_idx),
+            destination=dst[out_idx],
+            src_transform=ds.transform,
+            src_crs=ds.crs,
+            dst_transform=dst_transform,
+            dst_crs=dst_crs,
+            resampling=resampling,
+        )
+    return dst
 
 
 def create_dataset_patches(cfg: dict) -> Path:
@@ -99,6 +136,7 @@ def create_dataset_patches(cfg: dict) -> Path:
 
     patch_px_sar = int(cfg.get("patch_px_sar", 40))
     ratio = cfg.get("ratio_intact_to_damaged", 20)
+
     osm_layer = cfg.get("osm_layer", None)
     col_id = cfg.get("columns", {}).get("id", "osm_id")
     col_label = cfg.get("columns", {}).get("label", "damagedid")
@@ -123,8 +161,14 @@ def create_dataset_patches(cfg: dict) -> Path:
             random.shuffle(intact_idx)
             intact_idx = intact_idx[: len(damaged_idx) * int(ratio)]
 
+        common_resolution_m = choose_common_resolution_m(hh_ds, rgb_ds, cfg)
+        common_patch_px = choose_common_patch_size_px(cfg, common_resolution_m)
         print(f"Buildings in SAR tile -> damaged={len(damaged_idx)} | intact={len(intact_idx)}")
-        patch_w_m, patch_h_m = physical_patch_size_m(hh_ds, patch_px_sar)
+        print(
+            "Common grid -> "
+            f"resolution={common_resolution_m:.3f} m | patch={common_patch_px}x{common_patch_px} px | "
+            f"size={common_patch_px * common_resolution_m:.2f} m"
+        )
 
         rows = []
         for idx in tqdm(damaged_idx + intact_idx, desc="Writing patches", unit="building"):
@@ -135,40 +179,86 @@ def create_dataset_patches(cfg: dict) -> Path:
             centroid = geom.centroid
             cx, cy = centroid.x, centroid.y
 
-            sar_win = compute_sar_window(hh_ds, cx, cy, patch_px_sar)
-            if sar_win is None:
+            common_transform = compute_common_patch_transform(
+                cx, cy, common_patch_px, common_resolution_m
+            )
+            common_bounds = patch_bounds_from_transform(common_transform, common_patch_px)
+            if not dataset_covers_bounds(hh_ds, common_bounds):
                 continue
 
-            stack = read_hh_hv_stack(hh_ds, hv_ds, sar_win)
-            win_tr = rasterio.windows.transform(sar_win, hh_ds.transform)
-            mask = rasterize_footprint(geom, out_shape=(stack.shape[1], stack.shape[2]), transform=win_tr)
-
-            cx_rgb, cy_rgb = cx, cy
             if rgb_ds.crs != hh_ds.crs:
-                pt = gpd.GeoSeries([centroid], crs=hh_ds.crs).to_crs(rgb_ds.crs).geometry.iloc[0]
-                cx_rgb, cy_rgb = pt.x, pt.y
+                patch_geom = gpd.GeoSeries(
+                    [box(*common_bounds)], crs=hh_ds.crs
+                ).to_crs(rgb_ds.crs).geometry.iloc[0]
+                rgb_bounds = patch_geom.bounds
+            else:
+                rgb_bounds = common_bounds
 
-            rgb_win = compute_window_for_same_area(rgb_ds, cx_rgb, cy_rgb, patch_w_m, patch_h_m)
-            if rgb_win is None:
+            if not dataset_covers_bounds(rgb_ds, rgb_bounds):
                 continue
 
-            rgb_patch = rgb_ds.read([1, 2, 3], window=rgb_win)
+            stack = np.concatenate(
+                [
+                    read_dataset_on_common_grid(
+                        hh_ds,
+                        [1],
+                        hh_ds.crs,
+                        common_transform,
+                        common_patch_px,
+                        resampling=Resampling.bilinear,
+                    ),
+                    read_dataset_on_common_grid(
+                        hv_ds,
+                        [1],
+                        hh_ds.crs,
+                        common_transform,
+                        common_patch_px,
+                        resampling=Resampling.bilinear,
+                    ),
+                ],
+                axis=0,
+            )
+            mask = rasterize_footprint(
+                geom,
+                out_shape=(common_patch_px, common_patch_px),
+                transform=common_transform,
+            )
+            rgb_patch = read_dataset_on_common_grid(
+                rgb_ds,
+                [1, 2, 3],
+                hh_ds.crs,
+                common_transform,
+                common_patch_px,
+                resampling=Resampling.bilinear,
+            )
 
             label = int(buildings.loc[idx, col_label])
             prefix = "D" if label == 1 else "I"
             sample_id = f"{prefix}_{buildings.loc[idx, col_id]}"
 
-            save_geotiff(out_dir / f"{sample_id}_SAR.tif", stack, hh_ds.crs, win_tr, dtype=np.float32)
-            save_geotiff(out_dir / f"{sample_id}_SARftp.tif", mask.astype(np.uint8), hh_ds.crs, win_tr, dtype=np.uint8)
+            save_geotiff(
+                out_dir / f"{sample_id}_SAR.tif",
+                stack,
+                hh_ds.crs,
+                common_transform,
+                dtype=np.float32,
+            )
+            save_geotiff(
+                out_dir / f"{sample_id}_SARftp.tif",
+                mask.astype(np.uint8),
+                hh_ds.crs,
+                common_transform,
+                dtype=np.uint8,
+            )
             save_geotiff(
                 out_dir / f"{sample_id}_RGB.tif",
                 rgb_patch,
-                rgb_ds.crs,
-                rasterio.windows.transform(rgb_win, rgb_ds.transform),
-                dtype=rgb_patch.dtype,
+                hh_ds.crs,
+                common_transform,
+                dtype=np.float32,
             )
 
-            minx, miny, maxx, maxy = geom.bounds
+            minx, miny, maxx, maxy = common_bounds
             rows.append([sample_id, label, minx, miny, maxx, maxy])
 
     csv_path = out_dir / "patch_list.csv"
