@@ -22,12 +22,11 @@ cross_validation:
   num_folds: 5
 
 # -----------------------------------------------------------------------------
-# Model (FGCA only)
+# Model: building-guided gated fusion
 # -----------------------------------------------------------------------------
 model:
-  name: fgca
+  name: building_guided_fusion
   embed_dim: 128
-  num_heads: 4
   use_sar: true
   use_rgb: true
 
@@ -53,7 +52,7 @@ training:
 # Loss
 # -----------------------------------------------------------------------------
 loss:
-  use_class_weights: false
+  use_class_weights: true
 
 # -----------------------------------------------------------------------------
 # Pretraining

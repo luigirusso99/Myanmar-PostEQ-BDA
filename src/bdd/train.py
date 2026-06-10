@@ -10,7 +10,7 @@ from torch.utils.data import WeightedRandomSampler
 from tqdm.auto import tqdm
 
 from src.bdd.dataset import SarRgbFootprintDataset, make_loader, make_stratified_folds
-from src.bdd.model import MultiModalFGCA
+from src.bdd.model import MultiModalBuildingGuidedFusion
 from src.bdd.utils import set_seed, initialize_model
 
 
@@ -66,11 +66,10 @@ def train_cross_validation(cfg: dict):
             shuffle=False,
         )
 
-        model = MultiModalFGCA(
+        model = MultiModalBuildingGuidedFusion(
             embed_dim=int(cfg["model"].get("embed_dim", 128)),
             use_sar=bool(cfg["model"].get("use_sar", True)),
             use_rgb=bool(cfg["model"].get("use_rgb", True)),
-            num_heads=int(cfg["model"].get("num_heads", 4)),
         )
 
         model.apply(initialize_model)
@@ -92,7 +91,12 @@ def train_cross_validation(cfg: dict):
             lr=float(cfg["training"].get("learning_rate", 1e-4)),
         )
         epochs = int(cfg["training"].get("epochs", 30))
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=float(cfg["training"].get("learning_rate", 1e-4)),
+            epochs=epochs,
+            steps_per_epoch=len(train_loader),
+        )
         scaler = torch.amp.GradScaler(enabled=device.type == "cuda")
 
         best_auc, best_epoch, patience_ctr = 0.0, -1, 0
@@ -117,8 +121,11 @@ def train_cross_validation(cfg: dict):
                     loss = criterion(logits, labels)
 
                 scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
                 scaler.update()
+                scheduler.step()
                 train_loss += loss.item()
 
             model.eval()
@@ -139,6 +146,17 @@ def train_cross_validation(cfg: dict):
             outs = np.concatenate(outs)
             gts = np.concatenate(gts).astype(int)
             auc = metrics.roc_auc_score(gts, outs)
+            ap = metrics.average_precision_score(gts, outs)
+
+            fpr, tpr, thresholds = metrics.roc_curve(gts, outs)
+            best_idx = np.argmax(tpr - fpr)
+            best_threshold = float(thresholds[best_idx])
+
+            preds_best = (outs >= best_threshold).astype(int)
+            f1 = metrics.f1_score(gts, preds_best)
+            precision = metrics.precision_score(gts, preds_best, zero_division=0)
+            recall = metrics.recall_score(gts, preds_best, zero_division=0)
+
             fold_oof = pd.DataFrame(
                 {
                     "id": sample_ids,
@@ -149,9 +167,18 @@ def train_cross_validation(cfg: dict):
                     ).astype(int),
                     "fold": fold_i,
                     "epoch": epoch,
+                    "best_threshold": best_threshold,
+                    "auprc": ap,
                 }
             )
-            print(f"Fold{fold_i} Ep{epoch} | TrainLoss {train_loss / len(train_loader):.4f} | ValAUROC {auc:.4f}")
+            print(
+                f"Fold{fold_i} Ep{epoch} | "
+                f"TrainLoss {train_loss / len(train_loader):.4f} | "
+                f"AUROC {auc:.4f} | "
+                f"AUPRC {ap:.4f} | "
+                f"F1 {f1:.4f} | "
+                f"Thr {best_threshold:.3f}"
+            )
 
             if auc > best_auc:
                 best_auc, best_epoch = auc, epoch
@@ -165,9 +192,14 @@ def train_cross_validation(cfg: dict):
                     print(f"[Fold{fold_i}] early stop at epoch {epoch}")
                     break
 
-            scheduler.step()
 
-        results.append({"fold": fold_i, "best_epoch": best_epoch, "best_auroc": best_auc})
+        results.append(
+            {
+                "fold": fold_i,
+                "best_epoch": best_epoch,
+                "best_auroc": best_auc,
+            }
+        )
         if best_fold_oof is not None:
             oof_rows.append(best_fold_oof)
         torch.cuda.empty_cache()
